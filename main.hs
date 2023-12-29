@@ -1,4 +1,5 @@
 import Data.List (sort)
+import Data.Char (isDigit, isSpace)
 -- PFL 2023/24 - Haskell practical assignment quickstart
 -- Updated on 27/12/2023
 
@@ -183,11 +184,39 @@ main = do
     test "Test 11" received (show expected) passed
 
 -- Part 2
+data Aexp
+  = Num Int          -- Represents a numeric constant
+  | Var String       -- Represents a variable
+  | AddTok Aexp Aexp    -- Represents addition of two arithmetic expressions
+  | SubTok Aexp Aexp    -- Represents subtraction of two arithmetic expressions
+  | MulTok Aexp Aexp    -- Represents multiplication of two arithmetic expressions
+  deriving (Show)
+
+data Bexp
+  = BoolLit Bool     -- Represents a boolean constant
+  | NotTok Bexp         -- Represents negation of a boolean expression
+  | AndTok Bexp Bexp    -- Represents logical AND of two boolean expressions
+  | OrTok Bexp Bexp     -- Represents logical OR of two boolean expressions
+  | EqTok Aexp Aexp     -- Represents equality comparison of two arithmetic expressions
+  | LtTok Aexp Aexp     -- Represents less than comparison of two arithmetic expressions
+  deriving (Show)
+
+data Stm
+  = Assign String Aexp   -- Represents assignment of an arithmetic expression to a variable
+  | If Bexp Stm Stm      -- Represents conditional statement
+  | While Bexp Stm       -- Represents while loop
+  | Seq [Stm]            -- Represents sequence of statements
+  deriving (Show)
 
 -- -- TODO: Define the types Aexp, Bexp, Stm and Program
 
+lexer :: String -> [String]
+lexer = words
+
+type Program = [Stm]
+
 -- compA :: Aexp -> Code
-compA = undefined -- TODO
+-- compA = undefined -- TODO
 
 -- -- compB :: Bexp -> Code
 -- compB = undefined -- TODO
