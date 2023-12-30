@@ -1,5 +1,5 @@
 import Data.List (sort)
-import Data.Char (isDigit, isSpace)
+import Data.Char (isSpace, isAlpha, isDigit, isAlphaNum)
 -- PFL 2023/24 - Haskell practical assignment quickstart
 -- Updated on 27/12/2023
 
@@ -115,8 +115,202 @@ test testName received expected passed = do
   putStrLn $ "  Expected:   " ++ expected
   putStrLn $ "  Passed Test:   " ++ passed
 
+-- Part 2
+data Aexp
+  = Num Integer         -- Represents a numeric constant
+  | Var String          -- Represents a variable
+  | AddTok Aexp Aexp    -- Represents addition of two arithmetic expressions
+  | SubTok Aexp Aexp    -- Represents subtraction of two arithmetic expressions
+  | MulTok Aexp Aexp    -- Represents multiplication of two arithmetic expressions
+  deriving (Show)
+
+data Bexp
+  = BoolLit Bool     -- Represents a boolean constant
+  | NotTok Bexp         -- Represents negation of a boolean expression
+  | AndTok Bexp Bexp    -- Represents logical AND of two boolean expressions
+  | OrTok Bexp Bexp     -- Represents logical OR of two boolean expressions
+  | EqArTok Aexp Aexp     -- Represents equality comparison of two arithmetic expressions
+  | EqBolTok Bexp Bexp     -- Represents equality comparison of two boolean expressions
+  | LeTok Aexp Aexp     -- Represents less than comparison of two arithmetic expressions
+  deriving (Show)
+
+data Stm
+  = Assign String Aexp   -- Represents assignment of an arithmetic expression to a variable
+  | If Bexp Stm Stm      -- Represents conditional statement
+  | While Bexp Stm       -- Represents while loop
+  | Seq [Stm]            -- Represents sequence of statements
+  deriving (Show)
+
+type Program = [Stm]
+
+lexer :: String -> [String]
+lexer = go []
+  where
+    go acc [] = reverse acc
+    go acc (c:cs)
+      | isSpace c = go acc cs
+      | isAlpha c = let (token, rest) = span isAlphaNum (c:cs) in go (classify token : acc) rest
+      | isDigit c =
+          let (token, rest) = span (\x -> isDigit x || x == '.') (c:cs)
+          in go (token : acc) rest
+      | c == ':' && head cs == '=' = go (":=" : acc) (tail cs)
+      | c == '<' && head cs == '=' = go ("<=" : acc) (tail cs)
+      | c == '=' && head cs == '=' = go ("==" : acc) (tail cs)
+      | otherwise = go ([c] : acc) cs
+
+    classify token
+      | token `elem` ["while", "if", "then", "else", "not", "and", "or", "do"] = token
+      | token `elem` ["+", "-", "*", ":=", "<", "<=", "==", "="] = token
+      | token `elem` [";", "(", ")"] = token
+      | token `elem` ["True", "False"] = token
+      | otherwise = token
+
+compA :: Aexp -> Code
+compA (Num n) = [Push n]
+compA (Var v) = [Fetch v]
+compA (AddTok a1 a2) = compA a2 ++ compA a1 ++ [Add]
+compA (SubTok a1 a2) = compA a2 ++ compA a1 ++ [Sub]
+compA (MulTok a1 a2) = compA a2 ++ compA a1 ++ [Mult]
+
+compB :: Bexp -> Code
+compB = undefined -- TODO
+
+compile :: Program -> Code
+compile [] = []
+compile (stmt:stmts) =
+  case stmt of
+    (Assign var aexp) -> compA aexp ++ [Store var] ++ compile stmts
+    (If bexp stm1 stm2) -> compB bexp ++ [Branch (compile [stm1]) (compile [stm2])] ++ compile stmts
+    (While bexp stm) -> compB bexp ++ [Loop (compile [stm]) (compile [stm])] ++ compile stmts
+
+parse :: String -> Program
+parse string =
+  let tokens = lexer string
+  in parseAux tokens
+
+parseAux :: [String] -> Program
+parseAux tokens =
+  case tokens of
+    [] -> []
+    (";" : restTokens) -> parseAux restTokens
+    (var : ":=" : restTokens) ->
+      let (expression, tokensAfterExpression) = parseAexp restTokens
+      in Assign var expression : parseAux tokensAfterExpression
+
+    ("if" : restTokens) ->
+      let
+        (bexp, tokensAfterBexp) = parseBexp restTokens -- parse boolean expression
+        -- ("then" : tokensAfterThen) = tokensAfterBexp -- check for "then" token
+        -- stm1 = parseAux tokensAfterThen   
+        -- ("else" : tokensAfterElse) = tokensAfterStm1
+        -- (stm2, tokensAfterStm2) = parseAux tokensAfterElse
+      in If bexp (Assign "x" (Num 5)) (Assign "y" (Num 7)) : parseAux tokensAfterBexp
+    _ -> []
+
+parseBexp :: [String] -> (Bexp, [String])
+parseBexp tokens =
+  let (exp1, tokensAfterExp1) = parseBexpTerm tokens
+  in parseBexpAux exp1 tokensAfterExp1
+
+parseBexpAux :: Bexp -> [String] -> (Bexp, [String])
+parseBexpAux exp1 (op:tokens) =
+  case op of
+    "=" ->
+        let (exp2, tokensAfterExp2) = parseBexpTerm tokens
+            (exp3, tokensAfterExp3) = parseBexpAux (EqBolTok exp1 exp2) tokensAfterExp2
+        in (exp3, tokensAfterExp3)
+    "and" ->
+        let (exp2, tokensAfterExp2) = parseBexpTerm tokens
+            (exp3, tokensAfterExp3) = parseBexpAux (AndTok exp1 exp2) tokensAfterExp2
+        in (exp3, tokensAfterExp3)
+    "or" ->
+        let (exp2, tokensAfterExp2) = parseBexpTerm tokens
+            (exp3, tokensAfterExp3) = parseBexpAux (OrTok exp1 exp2) tokensAfterExp2
+        in (exp3, tokensAfterExp3)
+    "<=" ->
+        let (exp1, tokensAfterExp1) = parseAexpTerm tokens
+            (exp2, tokensAfterExp2) = parseAexpTerm tokensAfterExp1
+        in (LeTok exp1 exp2, tokensAfterExp2)
+    "==" ->
+        let (exp1, tokensAfterExp1) = parseAexpTerm tokens
+            (exp2, tokensAfterExp2) = parseAexpTerm tokensAfterExp1
+        in (EqArTok exp1 exp2, tokensAfterExp2)
+    _ -> (exp1, op:tokens)
+parseBexpAux exp tokens = (exp, tokens)
+
+parseBexpTerm :: [String] -> (Bexp, [String])
+parseBexpTerm (token:tokens) =
+  parseBexpFactor (token:tokens)
+
+parseBexpFactor :: [String] -> (Bexp, [String])
+parseBexpFactor (token:tokens) =
+  case token of
+    "(" ->
+      let (exp, tokensAfterExp) = parseBexp tokens
+      in case tokensAfterExp of
+           (")":restTokens) -> (exp, restTokens)
+           _ -> error "Missing closing parenthesis"
+    "True" -> (BoolLit True, tokens)
+    "False" -> (BoolLit False, tokens)
+    "not" ->
+      let (exp, tokensAfterExp) = parseBexp tokens
+      in (NotTok exp, tokensAfterExp)
+    var -> error ("Invalid boolean expression: " ++ show var)
+
+-------------------------------------------------------------------------------------------
+-- ARITHMETIC EXPRESSION PARSER  
+-------------------------------------------------------------------------------------------
+parseAexp :: [String] -> (Aexp, [String])
+parseAexp tokens =
+  let (exp1, tokensAfterExp1) = parseAexpTerm tokens
+  in parseAexpAux exp1 tokensAfterExp1
+
+parseAexpAux :: Aexp -> [String] -> (Aexp, [String])
+parseAexpAux exp1 (op:tokens) =
+  case op of
+    "+" ->
+      let (exp2, tokensAfterExp2) = parseAexpTerm tokens
+          (exp3, tokensAfterExp3) = parseAexpAux (AddTok exp1 exp2) tokensAfterExp2
+      in (exp3, tokensAfterExp3)
+    "-" ->
+      let (exp2, tokensAfterExp2) = parseAexpTerm tokens
+          (exp3, tokensAfterExp3) = parseAexpAux (SubTok exp1 exp2) tokensAfterExp2
+      in (exp3, tokensAfterExp3)
+    "*" ->
+      let (exp2, tokensAfterExp2) = parseAexpTerm tokens
+          (exp3, tokensAfterExp3) = parseAexpAux (MulTok exp1 exp2) tokensAfterExp2
+      in (exp3, tokensAfterExp3)
+    _ -> (exp1, op:tokens)
+parseAexpAux exp tokens = (exp, tokens)
+
+parseAexpTerm :: [String] -> (Aexp, [String])
+parseAexpTerm (token:tokens) =
+  parseAexpFactor (token:tokens)
+
+parseAexpFactor :: [String] -> (Aexp, [String])
+parseAexpFactor (token:tokens) =
+  case token of
+    "(" ->
+      let (exp, tokensAfterExp) = parseAexp tokens
+      in case tokensAfterExp of
+           (")":restTokens) -> (exp, restTokens)
+           _ -> error "Missing closing parenthesis"
+    var ->
+      if all isAlpha var
+        then (Var var, tokens)
+        else (Num (read var :: Integer), tokens)
+
+
+-- To help you test your parser
+testParser :: String -> (String, String)
+testParser programCode = (stack2Str stack, state2Str state)
+  where (_,stack,state) = run(compile (parse programCode), createEmptyStack, createEmptyState)
+
 main :: IO ()
 main = do
+    -- Part 1 tests
+    putStrLn "=== Part 1 tests ==="
+
     let instructions = [Push 10,Push 4,Push 3,Sub,Mult]
     let received = show (run (instructions, createEmptyStack, createEmptyState))
     let expected = ("-10","")
@@ -183,54 +377,97 @@ main = do
     let passed = show (testAssembler instructions == expected)
     test "Test 11" received (show expected) passed
 
--- Part 2
-data Aexp
-  = Num Int          -- Represents a numeric constant
-  | Var String       -- Represents a variable
-  | AddTok Aexp Aexp    -- Represents addition of two arithmetic expressions
-  | SubTok Aexp Aexp    -- Represents subtraction of two arithmetic expressions
-  | MulTok Aexp Aexp    -- Represents multiplication of two arithmetic expressions
-  deriving (Show)
 
-data Bexp
-  = BoolLit Bool     -- Represents a boolean constant
-  | NotTok Bexp         -- Represents negation of a boolean expression
-  | AndTok Bexp Bexp    -- Represents logical AND of two boolean expressions
-  | OrTok Bexp Bexp     -- Represents logical OR of two boolean expressions
-  | EqTok Aexp Aexp     -- Represents equality comparison of two arithmetic expressions
-  | LtTok Aexp Aexp     -- Represents less than comparison of two arithmetic expressions
-  deriving (Show)
+    -- Part 2 tests
+    putStrLn "=== Part 2 tests ==="
 
-data Stm
-  = Assign String Aexp   -- Represents assignment of an arithmetic expression to a variable
-  | If Bexp Stm Stm      -- Represents conditional statement
-  | While Bexp Stm       -- Represents while loop
-  | Seq [Stm]            -- Represents sequence of statements
-  deriving (Show)
+    let string = "x := 5; x := x - 1;"
+    let instructions = compile (parse string)
+    print string
+    print $ parse string
+    print instructions
+    let received = show (run (instructions, createEmptyStack, createEmptyState))
+    let expected = ("","x=4")
+    let passed = show (testParser string == expected)
+    test "Test 12" received (show expected) passed
 
--- -- TODO: Define the types Aexp, Bexp, Stm and Program
+    let string = "x := 0 - 2;"
+    let instructions = compile (parse string)
+    let received = show (run (instructions, createEmptyStack, createEmptyState))
+    let expected = ("","x=-2")
+    let passed = show (testParser string == expected)
+    test "Test 13" received (show expected) passed
 
-lexer :: String -> [String]
-lexer = words
+    let string = "if (not True and 2 <= 5 = 3 == 4) then x :=1; else y := 2;"
+    let instructions = compile (parse string)
+    let received = show (run (instructions, createEmptyStack, createEmptyState))
+    let expected = ("","y=2")
+    let passed = show (testParser string == expected)
+    test "Test 14" received (show expected) passed
 
-type Program = [Stm]
+    let string = "x := 42; if x <= 43 then x := 1; else (x := 33; x := x+1;);"
+    let instructions = compile (parse string)
+    let received = show (run (instructions, createEmptyStack, createEmptyState))
+    let expected = ("","x=1")
+    let passed = show (testParser string == expected)
+    test "Test 15" received (show expected) passed
 
--- compA :: Aexp -> Code
--- compA = undefined -- TODO
+    let string = "x := 42; if x <= 43 then x := 1; else x := 33; x := x+1;"
+    let instructions = compile (parse string)
+    let received = show (run (instructions, createEmptyStack, createEmptyState))
+    let expected = ("","x=2")
+    let passed = show (testParser string == expected)
+    test "Test 16" received (show expected) passed
 
--- -- compB :: Bexp -> Code
--- compB = undefined -- TODO
+    let string = "x := 42; if x <= 43 then x := 1; else x := 33; x := x+1; z := x+x;"
+    let instructions = compile (parse string)
+    let received = show (run (instructions, createEmptyStack, createEmptyState))
+    let expected = ("","x=2,z=4")
+    let passed = show (testParser string == expected)
+    test "Test 17" received (show expected) passed
 
--- -- compile :: Program -> Code
--- compile = undefined -- TODO
+    let string = "x := 44; if x <= 43 then x := 1; else (x := 33; x := x+1;); y := x*2;"
+    let instructions = compile (parse string)
+    let received = show (run (instructions, createEmptyStack, createEmptyState))
+    let expected = ("","x=34,y=68")
+    let passed = show (testParser string == expected)
+    test "Test 18" received (show expected) passed
 
--- -- parse :: String -> Program
--- parse = undefined -- TODO
+    let string = "x := 42; if x <= 43 then (x := 33; x := x+1;) else x := 1;"
+    let instructions = compile (parse string)
+    let received = show (run (instructions, createEmptyStack, createEmptyState))
+    let expected = ("","x=34")
+    let passed = show (testParser string == expected)
+    test "Test 19" received (show expected) passed
 
--- -- To help you test your parser
--- testParser :: String -> (String, String)
--- testParser programCode = (stack2Str stack, store2Str store)
---   where (_,stack,store) = run(compile (parse programCode), createEmptyStack, createEmptyStore)
+    let string = "if (1 == 0+1 = 2+1 == 3) then x := 1; else x := 2;"
+    let instructions = compile (parse string)
+    let received = show (run (instructions, createEmptyStack, createEmptyState))
+    let expected = ("","x=1")
+    let passed = show (testParser string == expected)
+    test "Test 20" received (show expected) passed
+
+    let string = "if (1 == 0+1 = (2+1 == 4)) then x := 1; else x := 2;"
+    let instructions = compile (parse string)
+    let received = show (run (instructions, createEmptyStack, createEmptyState))
+    let expected = ("","x=2")
+    let passed = show (testParser string == expected)
+    test "Test 21" received (show expected) passed
+
+    let string = "x := 2; y := (x - 3)*(4 + 2*3); z := x +x*(2);"
+    let instructions = compile (parse string)
+    let received = show (run (instructions, createEmptyStack, createEmptyState))
+    let expected = ("","x=2,y=-10,z=6")
+    let passed = show (testParser string == expected)
+    test "Test 22" received (show expected) passed
+
+    let string = "i := 10; fact := 1; while (not(i == 1)) do (fact := fact * i; i := i - 1;);"
+    let instructions = compile (parse string)
+    let received = show (run (instructions, createEmptyStack, createEmptyState))
+    let expected = ("","fact=3628800,i=1")
+    let passed = show (testParser string == expected)
+    test "Test 23" received (show expected) passed
+
 
 -- -- Examples:
 -- -- testParser "x := 5; x := x - 1;" == ("","x=4")

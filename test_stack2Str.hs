@@ -1,33 +1,11 @@
 import Data.List (sort)
 import Data.Char (isSpace, isAlpha, isDigit, isAlphaNum)
 
--- type Stack = [String]
-
--- createEmptyStack :: Stack
--- createEmptyStack = []
-
--- stack2Str :: Stack -> String
--- stack2Str stack =
---   let myList = concatMap showValue stack
---   in if null myList then [] else init myList
---   where showValue var = var ++ ","
-
--- printStack :: Stack -> String -> IO ()
--- printStack stack expected = putStrLn (stack2Str stack ++ if stack2Str stack == expected then " Test Passed" else " Test Failed")
-
--- type State = [(String, String)]
-
--- createEmptyState :: State
--- createEmptyState = []
-
--- state2Str :: State -> String
--- state2Str state =
---   let myList = concatMap showPair $ sort state
---   in if null myList then [] else init myList
---   where showPair (var, value) = var ++ "=" ++ value ++ ","
-
--- printState :: State -> String -> IO ()
--- printState state expected = putStrLn (state2Str state ++ if state2Str state == expected then " Test Passed" else " Test Failed")
+data Inst =
+  Push Integer | Add | Mult | Sub | Tru | Fals | Equ | Le | And | Neg | Fetch String | Store String | Noop |
+  Branch Code Code | Loop Code Code
+  deriving Show
+type Code = [Inst]
 
 data Aexp
   = Num Integer         -- Represents a numeric constant
@@ -42,8 +20,9 @@ data Bexp
   | NotTok Bexp         -- Represents negation of a boolean expression
   | AndTok Bexp Bexp    -- Represents logical AND of two boolean expressions
   | OrTok Bexp Bexp     -- Represents logical OR of two boolean expressions
-  | EqTok Aexp Aexp     -- Represents equality comparison of two arithmetic expressions
-  | LtTok Aexp Aexp     -- Represents less than comparison of two arithmetic expressions
+  | EqArTok Aexp Aexp     -- Represents equality comparison of two arithmetic expressions
+  | EqBolTok Bexp Bexp     -- Represents equality comparison of two boolean expressions
+  | LeTok Aexp Aexp     -- Represents less than comparison of two arithmetic expressions
   deriving (Show)
 
 data Stm
@@ -65,46 +44,99 @@ parseAux :: [String] -> Program
 parseAux tokens =
   case tokens of
     [] -> []
-    ";" : restTokens -> parseAux restTokens
+    (";" : restTokens) -> parseAux restTokens
     (var : ":=" : restTokens) ->
       let (expression, tokensAfterExpression) = parseAexp restTokens
       in Assign var expression : parseAux tokensAfterExpression
+
+    ("if" : restTokens) ->
+      let
+        (bexp, tokensAfterBexp) = parseBexp restTokens -- parse boolean expression
+        -- ("then" : tokensAfterThen) = tokensAfterBexp -- check for "then" token
+        -- stm1 = parseAux tokensAfterThen   
+        -- ("else" : tokensAfterElse) = tokensAfterStm1
+        -- (stm2, tokensAfterStm2) = parseAux tokensAfterElse
+      in If bexp (Assign "x" (Num 5)) (Assign "y" (Num 7)) : parseAux tokensAfterBexp
     _ -> []
 
+-------------------------------------------------------------------------------------------
+-- BOOLEAN EXPRESSION PARSER
+-------------------------------------------------------------------------------------------
+parseBexp :: [String] -> (Bexp, [String])
+parseBexp tokens =
+  let (exp1, tokensAfterExp1) = parseBexpFactor tokens
+  in parseBexpAux exp1 tokensAfterExp1
+
+parseBexpAux :: Bexp -> [String] -> (Bexp, [String])
+parseBexpAux exp1 (op:tokens) =
+  case op of
+    "=" ->
+        let (exp2, tokensAfterExp2) = parseBexpFactor tokens
+            (exp3, tokensAfterExp3) = parseBexpAux (EqBolTok exp1 exp2) tokensAfterExp2
+        in (exp3, tokensAfterExp3)
+    "and" ->
+        let (exp2, tokensAfterExp2) = parseBexpFactor tokens
+            (exp3, tokensAfterExp3) = parseBexpAux (AndTok exp1 exp2) tokensAfterExp2
+        in (exp3, tokensAfterExp3)
+    "or" ->
+        let (exp2, tokensAfterExp2) = parseBexpFactor tokens
+            (exp3, tokensAfterExp3) = parseBexpAux (OrTok exp1 exp2) tokensAfterExp2
+        in (exp3, tokensAfterExp3)
+    -- "<=" ->
+    --     let (exp1, tokensAfterExp1) = parseAexpFactor tokens
+    --         (exp2, tokensAfterExp2) = parseAexpFactor tokensAfterExp1
+    --     in (LeTok exp1 exp2, tokensAfterExp2)
+    -- "==" ->
+    --     let (exp1, tokensAfterExp1) = parseAexpFactor tokens
+    --         (exp2, tokensAfterExp2) = parseAexpFactor tokensAfterExp1
+    --     in (EqArTok exp1 exp2, tokensAfterExp2)
+    _ -> (exp1, op:tokens)
+parseBexpAux exp tokens = (exp, tokens)
+
+parseBexpFactor :: [String] -> (Bexp, [String])
+parseBexpFactor (token:tokens) =
+  case token of
+    "(" ->
+      let (exp, tokensAfterExp) = parseBexp tokens
+      in case tokensAfterExp of
+           (")":restTokens) -> (exp, restTokens)
+           _ -> error "Missing closing parenthesis"
+    "True" -> (BoolLit True, tokens)
+    "False" -> (BoolLit False, tokens)
+    "not" ->
+      let (exp, tokensAfterExp) = parseBexp tokens
+      in (NotTok exp, tokensAfterExp)
+    var -> error ("Invalid boolean expression: " ++ show var)
+
+-------------------------------------------------------------------------------------------
+-- ARITHMETIC EXPRESSION PARSER  
+-------------------------------------------------------------------------------------------
 parseAexp :: [String] -> (Aexp, [String])
 parseAexp tokens =
-  let (exp1, tokensAfterExp1) = parseTerm tokens
+  let (exp1, tokensAfterExp1) = parseAexpFactor tokens
   in parseAexpAux exp1 tokensAfterExp1
 
 parseAexpAux :: Aexp -> [String] -> (Aexp, [String])
 parseAexpAux exp1 (op:tokens) =
   case op of
+    "*" ->
+      let (exp2, tokensAfterExp2) = parseAexpFactor tokens
+          (exp3, tokensAfterExp3) = parseAexpAux (MulTok exp1 exp2) tokensAfterExp2
+      in (exp3, tokensAfterExp3)
     "+" ->
-      let (exp2, tokensAfterExp2) = parseTerm tokens
+      let (exp2, tokensAfterExp2) = parseAexpFactor tokens
           (exp3, tokensAfterExp3) = parseAexpAux (AddTok exp1 exp2) tokensAfterExp2
       in (exp3, tokensAfterExp3)
     "-" ->
-      let (exp2, tokensAfterExp2) = parseTerm tokens
+      let (exp2, tokensAfterExp2) = parseAexpFactor tokens
           (exp3, tokensAfterExp3) = parseAexpAux (SubTok exp1 exp2) tokensAfterExp2
-      in (exp3, tokensAfterExp3)
-    "*" ->
-      let (exp2, tokensAfterExp2) = parseTerm tokens
-          (exp3, tokensAfterExp3) = parseAexpAux (MulTok exp1 exp2) tokensAfterExp2
       in (exp3, tokensAfterExp3)
     _ -> (exp1, op:tokens)
 parseAexpAux exp tokens = (exp, tokens)
 
-parseTerm :: [String] -> (Aexp, [String])
-parseTerm (token:tokens) =
-  parseFactor (token:tokens)
-
-
-parseFactor :: [String] -> (Aexp, [String])
-parseFactor (token:tokens) =
+parseAexpFactor :: [String] -> (Aexp, [String])
+parseAexpFactor (token:tokens) =
   case token of
-    "-" ->
-      let (exp, tokensAfterExp) = parseFactor tokens
-      in (MulTok (Num (-1)) exp, tokensAfterExp)
     "(" ->
       let (exp, tokensAfterExp) = parseAexp tokens
       in case tokensAfterExp of
@@ -115,7 +147,9 @@ parseFactor (token:tokens) =
         then (Var var, tokens)
         else (Num (read var :: Integer), tokens)
 
--- Function to tokenize a string
+-------------------------------------------------------------------------------------------
+-- LEXER
+-----------------------------------------------------------------------------------------
 lexer :: String -> [String]
 lexer = go []
   where
@@ -138,15 +172,35 @@ lexer = go []
       | token `elem` ["True", "False"] = token
       | otherwise = token
 
--- Example usage:
+
+
+compA :: Aexp -> Code
+compA (Num n) = [Push n]
+compA (Var v) = [Fetch v]
+compA (AddTok a1 a2) = compA a1 ++ compA a2 ++ [Add]
+compA (SubTok a1 a2) = compA a1 ++ compA a2 ++ [Sub]
+compA (MulTok a1 a2) = compA a1 ++ compA a2 ++ [Mult]
+
+
+-- compB :: Bexp -> Code
+-- compB (BoolLit True) = [Push 1]
+-- compB (BoolLit False) = [Push 0]
+-- compB (NotTok b) = compB b ++ [Not]
+-- compB (AndTok b1 b2) = compB b1 ++ compB b2 ++ [And]
+-- compB (OrTok b1 b2) = compB b1 ++ compB b2 ++ [Or]
+
+
+compile :: Program -> Code
+compile [] = []
+compile (stmt:stmts) =
+  case stmt of
+    (Assign var aexp) -> compA aexp ++ [Store var] ++ compile stmts
+    -- add other cases here if needed
+
+-------------------------------------------------------------------------------------------
+-- MAIN
+-------------------------------------------------------------------------------------------
 main :: IO ()
 main = do
-    -- let myStack = ["-20","True","False"]
-    -- let expectedStack = "False,True,-20"
-    -- let myState = [("z", "10"), ("y", "20"), ("x", "30")]
-    -- let expectedState = "x=30,y=20,z=10"
-    -- printStack myStack expectedStack
-    -- printState myState expectedState
-    let input2 = "x := 0 - 2;"
+    let input2 = "i := 5; if True then x := 5 else y := 7"
     print $ parse input2
-
